@@ -1,3 +1,26 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>3D Mesh Spectrogram with Native Audio Controls</title>
+  <style>
+    body { margin:0; background:#000; color:#fff; overflow:hidden; font-family:sans-serif; }
+    #ui {
+      position:absolute; top:50%; left:10px; z-index:10; transform: translateY(-50%);
+      background:rgba(0,0,0,0.6); padding:8px; border-radius:4px;
+      width:300px;
+    }
+    #ui input[type=file],
+    #ui audio,
+    #ui select,
+    #ui button {
+      width:100%;
+      margin:6px 0;
+      display:block;
+    }
+    canvas { display:block; }
+  </style>
+</head>
 <body>
   <div id="ui">
     <input type="file" id="audio-upload" accept=".mp3,.wav" />
@@ -181,3 +204,4 @@
   });
   </script>
 </body>
+</html>
