@@ -4,40 +4,56 @@
   <meta charset="UTF-8" />
   <title>3D Mesh Spectrogram with Native Audio Controls</title>
   <style>
-    body { margin:0; background:#000; color:#fff; overflow:hidden; font-family:sans-serif; }
-    #ui {
-      position:absolute; top:10px; left:10px; z-index:10;
-      background:rgba(0,0,0,0.6); padding:8px; border-radius:4px;
-      width:300px;
+    /* fullscreen canvas */
+    html, body {
+      margin: 0 !important;
+      padding: 0 !important;
+      height: 100%;
+      overflow: hidden !important;
     }
-    #ui input[type=file],
+    #three-canvas {
+      position: fixed;
+      top: 0; left: 0;
+      width: 100vw !important;
+      height: 100vh !important;
+      display: block;
+      z-index: 1;
+    }
+    /* UI panel */
+    #ui {
+      position: fixed;
+      top: 100px; left: 10px;
+      z-index: 2;
+      background: rgba(0,0,0,0.7);
+      padding: 8px;
+      border-radius: 4px;
+      width: 260px;
+    }
+    #ui input[type="file"],
     #ui audio,
     #ui select,
     #ui button {
-      width:100%;
-      margin:6px 0;
-      display:block;
+      width: 100%;
+      margin: 6px 0;
+      display: block;
     }
-    canvas { display:block; }
   </style>
 </head>
 <body>
+  <canvas id="three-canvas"></canvas>
+
   <div id="ui">
     <input type="file" id="audio-upload" accept=".mp3,.wav" />
-    <!-- native controls: play/pause/seek built-in -->
     <audio id="audio-player" controls></audio>
     <label for="colormap">Colormap:
       <select id="colormap">
-        <option value="inferno">Inferno</option>
         <option value="viridis" selected>Viridis</option>
         <option value="plasma">Plasma</option>
         <option value="gray">Gray</option>
       </select>
     </label>
-    <button id="reset">🔄 Reset</button>
+    <button id="reset">Reset</button>
   </div>
-
-  <canvas id="three-canvas"></canvas>
 
   <script type="importmap">
   {
@@ -52,130 +68,142 @@
   import * as THREE from 'three';
   import { OrbitControls } from 'OrbitControls';
 
-  // — Renderer / Scene / Camera —
+  // Renderer
   const canvas   = document.getElementById('three-canvas');
   const renderer = new THREE.WebGLRenderer({ canvas, antialias: false });
   renderer.setSize(window.innerWidth, window.innerHeight);
-  const scene    = new THREE.Scene();
+
+  // Scene
+  const scene = new THREE.Scene();
   scene.background = new THREE.Color(0x000000);
 
-  const camera = new THREE.PerspectiveCamera(60, innerWidth/innerHeight, 0.1, 2000);
-  const az = THREE.MathUtils.degToRad(-45),
-        el = THREE.MathUtils.degToRad(30),
-        r  = 175;
+  // Camera + Controls
+  const camera = new THREE.PerspectiveCamera(60, window.innerWidth/window.innerHeight, 0.1, 2000);
+  const az = -Math.PI/4, el = Math.PI/6, r = 130;
   camera.position.set(
-    r * Math.sin(az)*Math.cos(el),
+    r * Math.sin(az) * Math.cos(el),
     r * Math.sin(el),
-    r * Math.cos(az)*Math.cos(el)
+    r * Math.cos(az) * Math.cos(el)
   );
   camera.lookAt(0,0,0);
-
   const controls = new OrbitControls(camera, renderer.domElement);
-  controls.enablePan = controls.enableDamping = false;
+  controls.enablePan = false;
   controls.update();
 
-  scene.add(new THREE.AmbientLight(0xffffff,0.6));
-  const dirLight = new THREE.DirectionalLight(0xffffff,0.8);
+  // Lights
+  scene.add(new THREE.AmbientLight(0xffffff, 1.2));
+  const dirLight = new THREE.DirectionalLight(0xffffff, 3.0);
   dirLight.position.set(50,100,50);
   scene.add(dirLight);
 
-  // — Spectrogram parameters —
+  // Spectrogram geometry
   const N = 256, M = 256;
-  const SPACING = 0.4, HEIGHT = 24;
-  const maxLog = Math.log10(N);
-  const freqMap = new Uint16Array(N).map((_,i) => i);
+  const SPACING = 0.4, HEIGHT = 24, margin = SPACING * 2;
+  const totalY = N * SPACING, maxLog = Math.log10(N);
 
-  // — Colormap —
-  const cmapSelect = document.getElementById('colormap');
-  function inferno(v){ v=THREE.MathUtils.clamp(v,0,1); return new THREE.Color(Math.pow(v,0.25),Math.pow(v,0.75)*0.4,v*0.3); }
-  function viridis(v){ v=THREE.MathUtils.clamp(v,0,1); return new THREE.Color().setHSL(0.7-0.7*v,1,0.5); }
-  function plasma(v){ v=THREE.MathUtils.clamp(v,0,1); const rv=1-v; return new THREE.Color().setHSL(0.9-0.6*rv,1,0.5); }
-  function gray(v){ v=THREE.MathUtils.clamp(v,0,1); return new THREE.Color(v,v,v); }
-  function getColor(v){
-    switch(cmapSelect.value){
-      case 'viridis': return viridis(v);
-      case 'plasma':  return plasma(v);
-      case 'gray':    return gray(v);
-      default:        return inferno(v);
+  const planeGeo = new THREE.PlaneGeometry(M*SPACING, N*SPACING, M-1, N-1);
+  planeGeo.rotateX(-Math.PI/2);
+  const posArr = planeGeo.attributes.position.array;
+  for (let row = 0; row < N; row++) {
+    const lp = Math.log10(1 + row) / maxLog;
+    for (let col = 0; col < M; col++) {
+      const i = (row*M + col)*3;
+      posArr[i + 2] = -totalY/2 + margin + lp*(totalY - margin);
     }
   }
+  planeGeo.attributes.position.needsUpdate = true;
 
-  // — Build mesh —
-  const plane = new THREE.PlaneGeometry(M*SPACING, N*SPACING, M-1, N-1);
-  plane.rotateX(-Math.PI/2);
-  const posArr = plane.attributes.position.array;
-  // semi-log freq axis:
-  const margin    = SPACING * 2;
-  const totalSpan = N * SPACING;
-  for (let row=0; row<N; row++){
-    const logProj = Math.log10(1+row)/maxLog;
-    for (let col=0; col<M; col++){
-      const idx = (row*M+col)*3;
-      posArr[idx+2] = -totalSpan/2 + margin + logProj*(totalSpan-margin);
-    }
-  }
-  plane.attributes.position.needsUpdate = true;
+  const colorAttr = new THREE.BufferAttribute(new Float32Array(posArr.length), 3);
+  planeGeo.setAttribute('color', colorAttr);
+  const colArr = colorAttr.array;
 
-  const colArr = new Float32Array(posArr.length);
-  plane.setAttribute('color', new THREE.BufferAttribute(colArr,3));
   const material = new THREE.MeshStandardMaterial({
     vertexColors: true,
     side: THREE.DoubleSide,
-    flatShading: true
+    flatShading: true,
+    roughness: 0.0,
+    metalness: 0.6
   });
-  scene.add(new THREE.Mesh(plane, material));
+  const mesh = new THREE.Mesh(planeGeo, material);
+  scene.add(mesh);
 
-  // — Audio / FFT setup —
-  const fileIn      = document.getElementById('audio-upload');
-  const audioPlayer = document.getElementById('audio-player');
-  const resetBtn    = document.getElementById('reset');
+  // Colormap
+  const cmap = document.getElementById('colormap');
+  const colormaps = {
+    viridis: v => { v = THREE.MathUtils.clamp(v,0,1); return new THREE.Color().setHSL(0.7 - 0.7*v,1,0.5); },
+    plasma:  v => { v = THREE.MathUtils.clamp(v,0,1); const rv = 1 - v; return new THREE.Color().setHSL(0.9 - 0.6*rv,1,0.5); },
+    gray:    v => { v = THREE.MathUtils.clamp(v,0,1); return new THREE.Color(v,v,v); }
+  };
+  function getColor(v){ return colormaps[cmap.value](v); }
 
+  // UI elements
+  const fileIn   = document.getElementById('audio-upload');
+  const audioEl  = document.getElementById('audio-player');
+  const resetBtn = document.getElementById('reset');
+
+  // FFT state
   let audioCtx, analyser, dataArray, sourceNode;
-  let spectBuffer = Array(M).fill().map(()=>new Uint8Array(N));
-  let frame = 0, tick = 0, audioEnded = false, endCount = 0;
+  let spectrogram = Array(M).fill().map(()=>new Uint8Array(N));
+  let frame = 0, tick = 0, ended = false, endCount = 0;
 
-  resetBtn.addEventListener('click', ()=> window.location.reload());
+  // Reset
+  resetBtn.addEventListener('click', ()=> location.reload());
   fileIn.addEventListener('click', ()=> fileIn.value = '');
 
-  fileIn.addEventListener('change', async e => {
-    const file = e.target.files[0];
-    if (!file) return;
+  // Load file & set up analyser
+  fileIn.addEventListener('change', async () => {
+    const f = fileIn.files[0];
+    if (!f) return;
 
-    // set up native audio
-    audioPlayer.src = URL.createObjectURL(file);
-    await new Promise(r=>audioPlayer.onloadedmetadata = r);
-    audioPlayer.play();
+    // clear prior data
+    spectrogram = Array(M).fill().map(()=>new Uint8Array(N));
+    frame = tick = endCount = 0;
+    ended = false;
+    for (let i = 0; i < posArr.length; i += 3) {
+      posArr[i+1] = 0;
+      colArr[i] = colArr[i+1] = colArr[i+2] = 0;
+    }
+    planeGeo.attributes.position.needsUpdate = true;
+    planeGeo.attributes.color.needsUpdate    = true;
 
-    // Web Audio for FFT
+    // set up <audio>
+    audioEl.src = URL.createObjectURL(f);
+    await new Promise(r => audioEl.onloadedmetadata = r);
+
+    // set up Web Audio analyser
     audioCtx = new (window.AudioContext||window.webkitAudioContext)();
     analyser = audioCtx.createAnalyser();
     analyser.fftSize = N * 4;
     dataArray = new Uint8Array(analyser.frequencyBinCount);
 
-    sourceNode = audioCtx.createMediaElementSource(audioPlayer);
+    sourceNode = audioCtx.createMediaElementSource(audioEl);
     sourceNode.connect(analyser);
     analyser.connect(audioCtx.destination);
 
-    audioPlayer.onended = ()=> audioEnded = true;
+    audioEl.onended = () => { ended = true; };
 
+    // start playback automatically
+    audioEl.play();
+
+    // kick off loops
     requestAnimationFrame(updateMesh);
     requestAnimationFrame(render);
   });
 
+  // Mesh update
   function updateMesh(){
     requestAnimationFrame(updateMesh);
-    if (audioPlayer.paused && !audioEnded) return;
+    if (audioEl.paused && !ended) return;
     if (++tick % 2) return;  // ~30fps
 
     analyser.getByteFrequencyData(dataArray);
-    spectBuffer[ frame % M ] = Uint8Array.from(dataArray.subarray(0,N));
+    spectrogram[ frame % M ] = Uint8Array.from(dataArray.subarray(0, N));
     frame++;
 
-    for (let f=0; f<N; f++){
-      const fi = freqMap[f];
-      for (let t=0; t<M; t++){
-        const idx = (f*M+t)*3;
-        const v   = spectBuffer[(frame-1-t+M)%M][fi] / 255;
+    for (let f = 0; f < N; f++){
+      for (let t = 0; t < M; t++){
+        const idx = (f*M + t)*3;
+        const v   = spectrogram[(frame-1-t+M)%M][f] / 255;
         posArr[idx+1] = v * HEIGHT;
         const c = getColor(v);
         colArr[idx]   = c.r;
@@ -183,25 +211,28 @@
         colArr[idx+2] = c.b;
       }
     }
+    planeGeo.attributes.position.needsUpdate = true;
+    planeGeo.attributes.color.needsUpdate    = true;
 
-    plane.attributes.position.needsUpdate = true;
-    plane.attributes.color.needsUpdate    = true;
-
-    if (audioEnded && ++endCount >= M) {
-      window.location.reload();
+    if (ended && ++endCount >= M) {
+      location.reload();
     }
   }
 
+  // Render loop
   function render(){
+    controls.update();
     renderer.render(scene, camera);
     requestAnimationFrame(render);
   }
 
-  window.addEventListener('resize', () => {
+  window.addEventListener('resize', ()=>{
     renderer.setSize(window.innerWidth, window.innerHeight);
     camera.aspect = window.innerWidth/window.innerHeight;
     camera.updateProjectionMatrix();
   });
+
+  render();
   </script>
 </body>
 </html>
