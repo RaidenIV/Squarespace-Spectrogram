@@ -1,5 +1,3 @@
-# Squarespace-Spectrogram
-
 <!DOCTYPE html>
 <html lang="en">
 <head>
