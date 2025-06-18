@@ -8,12 +8,13 @@
     html, body {
       margin: 0 !important;
       padding: 0 !important;
+      background: #000;
       height: 100%;
       overflow: hidden !important;
     }
     #three-canvas {
       position: fixed;
-      top: 0; left: 0;
+      top: 150px; left: 0;
       width: 100vw !important;
       height: 100vh !important;
       display: block;
@@ -21,13 +22,16 @@
     }
     /* UI panel */
     #ui {
-      position: fixed;
-      top: 100px; left: 10px;
+      position: absolute;
+      top: 20px;
+      left: 50%;
+      transform: translateX(-50%);
       z-index: 2;
-      background: rgba(255, 254, 254, 0.7);
+      background: rgba(255, 255, 255, 0.7);
       padding: 8px;
       border-radius: 4px;
       width: 300px;
+      box-sizing: border-box;
     }
     /* Choose File + Reset same size */
     #ui input[type="file"],
@@ -97,7 +101,7 @@
 
   // Camera + Controls
   const camera = new THREE.PerspectiveCamera(60, window.innerWidth/window.innerHeight, 0.1, 2000);
-  const az     = -Math.PI/4, el = Math.PI/6, r = 130;
+  const az     = -Math.PI/4, el = Math.PI/6, r = 150;
   camera.position.set(
     r * Math.sin(az) * Math.cos(el),
     r * Math.sin(el),
@@ -240,8 +244,8 @@
   }
 
   window.addEventListener('resize', ()=>{
-    renderer.setSize(window.innerWidth, window.innerHeight);
-    camera.aspect = window.innerWidth/window.innerHeight;
+    renderer.setSize(window.innerWidth, window.innerHeight - 80);
+    camera.aspect = window.innerWidth/(window.innerHeight-80);
     camera.updateProjectionMatrix();
   });
 
