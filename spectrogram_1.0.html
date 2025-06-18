@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <title>3D Mesh Spectrogram with Native Audio Controls</title>
+  <title>3D Mesh Spectrogram with LUT Colormaps</title>
   <style>
     /* fullscreen canvas */
     html, body {
@@ -27,7 +27,7 @@
       left: 50%;
       transform: translateX(-50%);
       z-index: 2;
-      background: rgba(255, 255, 255, 0.7);
+      background: rgba(255,255,255,0.7);
       padding: 8px;
       border-radius: 4px;
       width: 300px;
@@ -37,10 +37,9 @@
     #ui input[type="file"],
     #ui button {
       width: 100%;
-      height: 36px;          /* fixed height */
+      height: 36px;
       padding: 6px 4px;
-      margin: 2px 0;         /* minimal gap */
-      display: block;
+      margin: 2px 0;
       box-sizing: border-box;
       font-size: 14px;
     }
@@ -70,9 +69,10 @@
     <audio id="audio-player" controls></audio>
     <label for="colormap">Colormap:
       <select id="colormap">
-        <option value="viridis" selected>Viridis</option>
-        <option value="plasma">Plasma</option>
-        <option value="gray">Gray</option>
+        <option value="rainbow"selected>Rainbow</option>
+        <option value="cooltowarm">Cool→Warm</option>
+        <option value="blackbody">Blackbody</option>
+        <option value="grayscale">Grayscale</option>
       </select>
     </label>
   </div>
@@ -80,8 +80,9 @@
   <script type="importmap">
   {
     "imports": {
-      "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
-      "OrbitControls": "https://unpkg.com/three@0.160.0/examples/jsm/controls/OrbitControls.js"
+      "three":        "https://unpkg.com/three@0.160.0/build/three.module.js",
+      "OrbitControls":"https://unpkg.com/three@0.160.0/examples/jsm/controls/OrbitControls.js",
+      "Lut":          "https://unpkg.com/three@0.160.0/examples/jsm/math/Lut.js"
     }
   }
   </script>
@@ -89,6 +90,7 @@
   <script type="module">
   import * as THREE        from 'three';
   import { OrbitControls } from 'OrbitControls';
+  import { Lut }           from 'Lut';
 
   // Renderer
   const canvas   = document.getElementById('three-canvas');
@@ -97,11 +99,11 @@
 
   // Scene
   const scene = new THREE.Scene();
-  scene.background = new THREE.Color(0x000000);
+  scene.background = new THREE.Color( 0x000000 );
 
   // Camera + Controls
   const camera = new THREE.PerspectiveCamera(60, window.innerWidth/window.innerHeight, 0.1, 2000);
-  const az     = -Math.PI/4, el = Math.PI/6, r = 150;
+  const az = -Math.PI/4, el = Math.PI/6, r = 150;
   camera.position.set(
     r * Math.sin(az) * Math.cos(el),
     r * Math.sin(el),
@@ -113,7 +115,7 @@
   controls.update();
 
   // Lights
-  scene.add(new THREE.AmbientLight(0xffffff, 2.0));
+  scene.add( new THREE.AmbientLight(0xffffff, 2.0) );
   const dirLight = new THREE.DirectionalLight(0xffffff, 2.0);
   dirLight.position.set(50,100,50);
   scene.add(dirLight);
@@ -130,7 +132,7 @@
     const lp = Math.log10(1+row)/maxLog;
     for (let col=0; col<M; col++) {
       const i = (row*M + col)*3;
-      posArr[i+2] = -totalY/2 + margin + lp*(totalY-margin);
+      posArr[i+2] = -totalY/2 + margin + lp*(totalY - margin);
     }
   }
   planeGeo.attributes.position.needsUpdate = true;
@@ -151,25 +153,27 @@
   const mesh = new THREE.Mesh(planeGeo, material);
   scene.add(mesh);
 
-  // Colormap functions
-  const cmap = document.getElementById('colormap');
-  const colormaps = {
-    viridis: v=>{ v=THREE.MathUtils.clamp(v,0,1); return new THREE.Color().setHSL(0.7-0.7*v,1,0.5); },
-    plasma:  v=>{ v=THREE.MathUtils.clamp(v,0,1); const rv=1-v; return new THREE.Color().setHSL(0.9-0.6*rv,1,0.5); },
-    gray:    v=>{ v=THREE.MathUtils.clamp(v,0,1); return new THREE.Color(v,v,v); }
-  };
-  function getColor(v){ return colormaps[cmap.value](v); }
+  // --- LUT setup ---
+  const lut = new Lut( document.getElementById('colormap').value, 256 );
+  lut.setMin(0);
+  lut.setMax(1);
+
+  // When user changes the select:
+  document.getElementById('colormap').addEventListener('change', e => {
+    lut.setColorMap( e.target.value );
+  });
 
   // UI elements
   const fileIn = document.getElementById('audio-upload');
   const audio  = document.getElementById('audio-player');
   const reset  = document.getElementById('reset');
 
+  // Audio + FFT state
   let audioCtx, analyser, dataArray, sourceNode;
   let spectrogram = Array(M).fill().map(()=>new Uint8Array(N));
   let frame=0, tick=0, ended=false, endCount=0;
 
-  // Reset handler
+  // Reset
   reset.addEventListener('click', ()=>window.location.reload());
   fileIn.addEventListener('click', ()=>fileIn.value='');
 
@@ -224,7 +228,9 @@
         const idx = (f*M + t)*3;
         const v   = spectrogram[(frame-1-t+M)%M][f] / 255;
         posArr[idx+1] = v * HEIGHT;
-        const c = getColor(v);
+
+        // Use the LUT for color:
+        const c = lut.getColor(v) || new THREE.Color(0,0,0);
         colArr[idx]   = c.r;
         colArr[idx+1] = c.g;
         colArr[idx+2] = c.b;
