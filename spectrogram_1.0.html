@@ -2,25 +2,27 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <title>3D Mesh Spectrogram with LUT Colormaps</title>
+  <title>Combined Spectrogram & Sphere Visualizer with LUT Colormaps (v4 + Dual Azimuth)</title>
   <style>
-    /* fullscreen canvas */
-    html, body {
-      margin: 0 !important;
-      padding: 0 !important;
+    /* container box */
+    #viz-container {
+      width: 100%;
+      max-width: 1024px;
+      height: 768px;
+      margin: 0 auto;
+      position: relative;
       background: #000;
-      height: 100%;
-      overflow: hidden !important;
+      border-radius: 8px;
+      overflow: hidden;
     }
+    /* full-size three.js canvas */
     #three-canvas {
-      position: fixed;
-      top: 150px; left: 0;
-      width: 100vw !important;
-      height: 100vh !important;
+      position: absolute;
+      top: 0; left: 0;
+      width: 100%; height: 100%;
       display: block;
-      z-index: 1;
     }
-    /* UI panel */
+    /* UI overlay */
     #ui {
       position: absolute;
       top: 20px;
@@ -33,56 +35,68 @@
       width: 300px;
       box-sizing: border-box;
     }
-    /* Choose File + Reset same size */
-    #ui input[type="file"],
-    #ui button {
-      width: 100%;
-      height: 36px;
-      padding: 6px 4px;
-      margin: 2px 0;
-      box-sizing: border-box;
-      font-size: 14px;
-    }
-    /* other UI elements */
-    #ui audio {
-      margin: 6px 0;
-      width: 100%;
-    }
-    #ui label {
-      margin: 6px 0;
-      font-size: 14px;
+    #ui-header { text-align: right; margin-bottom:4px; }
+    #toggle-ui { background:transparent; border:none; cursor:pointer; font-size:14px; }
+    #ui.collapsed #ui-content { display: none; }
+    /* UI controls */
+    #ui-content select,
+    #ui-content input[type=file],
+    #ui-content audio,
+    #ui-content label,
+    #ui-content button {
       display: block;
+      margin-bottom: 8px;
+      width: 280px;
     }
-    #ui select {
-      width: 100%;
-      padding: 4px;
-      font-size: 14px;
-    }
+    #ui-content input[type=range] { width:180px; }
   </style>
 </head>
 <body>
-  <canvas id="three-canvas"></canvas>
-
-  <div id="ui">
-    <input type="file" id="audio-upload" accept=".mp3,.wav" />
-    <button id="reset">Reset</button>
-    <audio id="audio-player" controls></audio>
-    <label for="colormap">Colormap:
-      <select id="colormap">
-        <option value="rainbow"selected>Rainbow</option>
-        <option value="cooltowarm">Cool→Warm</option>
-        <option value="blackbody">Blackbody</option>
-        <option value="grayscale">Grayscale</option>
-      </select>
-    </label>
+  <div id="viz-container">
+    <canvas id="three-canvas"></canvas>
+    <div id="ui">
+      <div id="ui-header">
+        <button id="toggle-ui">Hide ▲</button>
+      </div>
+      <div id="ui-content">
+        <label>
+          Mode:
+          <select id="mode">
+            <option value="spectrogram">Spectrogram</option>
+            <option value="sphere">Wireframe Sphere</option>
+          </select>
+        </label>
+        <input type="file" id="audio-upload" accept=".mp3,.wav" />
+        <button id="reset">Reset</button>
+        <audio id="audio-player" controls></audio>
+        <div id="spectrogram-controls">
+          <label>
+            Colormap:
+            <select id="colormap">
+              <option value="rainbow" selected>Rainbow</option>
+              <option value="cooltowarm">Cool→Warm</option>
+              <option value="blackbody">Blackbody</option>
+              <option value="grayscale">Grayscale</option>
+            </select>
+          </label>
+        </div>
+        <div id="sphere-controls" style="display:none">
+          <label>
+            Noise magnitude:
+            <input type="range" id="noise-mag" min="0" max="20" step="0.1" value="7.5"/>
+          </label>
+        </div>
+      </div>
+    </div>
   </div>
 
   <script type="importmap">
   {
     "imports": {
-      "three":        "https://unpkg.com/three@0.160.0/build/three.module.js",
-      "OrbitControls":"https://unpkg.com/three@0.160.0/examples/jsm/controls/OrbitControls.js",
-      "Lut":          "https://unpkg.com/three@0.160.0/examples/jsm/math/Lut.js"
+      "three":         "https://unpkg.com/three@0.160.0/build/three.module.js",
+      "OrbitControls": "https://unpkg.com/three@0.160.0/examples/jsm/controls/OrbitControls.js",
+      "Lut":           "https://unpkg.com/three@0.160.0/examples/jsm/math/Lut.js",
+      "simplex-noise":"https://cdn.jsdelivr.net/npm/simplex-noise@3.0.0/dist/esm/simplex-noise.js"
     }
   }
   </script>
@@ -91,171 +105,207 @@
   import * as THREE        from 'three';
   import { OrbitControls } from 'OrbitControls';
   import { Lut }           from 'Lut';
+  import SimplexNoise     from 'simplex-noise';
 
-  // Renderer
-  const canvas   = document.getElementById('three-canvas');
-  const renderer = new THREE.WebGLRenderer({ canvas, antialias: false });
-  renderer.setSize(window.innerWidth, window.innerHeight);
+  // — DOM & sizes —
+  const container = document.getElementById('viz-container'),
+        canvas    = document.getElementById('three-canvas'),
+        uiPanel   = document.getElementById('ui'),
+        toggleBtn = document.getElementById('toggle-ui');
 
-  // Scene
+  // — Renderer / Scene / Camera / Controls —
+  const renderer = new THREE.WebGLRenderer({ canvas, antialias:true });
+  renderer.setSize(container.clientWidth, container.clientHeight);
   const scene = new THREE.Scene();
-  scene.background = new THREE.Color( 0x000000 );
 
-  // Camera + Controls
-  const camera = new THREE.PerspectiveCamera(60, window.innerWidth/window.innerHeight, 0.1, 2000);
-  const az = -Math.PI/4, el = Math.PI/6, r = 150;
-  camera.position.set(
-    r * Math.sin(az) * Math.cos(el),
-    r * Math.sin(el),
-    r * Math.cos(az) * Math.cos(el)
+  // Two distinct azimuths
+  const spectAz = -Math.PI/4;            // -45° for spectrogram
+  const sphereAz = spectAz+(55);  //    0° for sphere (i.e. +45° shift)
+  const elevation = Math.PI/6, radius = 150;
+
+  const camera = new THREE.PerspectiveCamera(
+    60,
+    container.clientWidth / container.clientHeight,
+    0.1, 2000
   );
-  camera.lookAt(0,0,0);
   const controls = new OrbitControls(camera, renderer.domElement);
   controls.enablePan = false;
-  controls.update();
 
-  // Lights
-  scene.add( new THREE.AmbientLight(0xffffff, 2.0) );
-  const dirLight = new THREE.DirectionalLight(0xffffff, 2.0);
-  dirLight.position.set(50,100,50);
+  // Position camera for given azimuth
+  function setCameraAz(az) {
+    camera.position.set(
+      radius * Math.sin(az) * Math.cos(elevation),
+      radius * Math.sin(elevation),
+      radius * Math.cos(az) * Math.cos(elevation)
+    );
+    camera.lookAt(0,0,0);
+    controls.update();
+  }
+
+  // initially spectrogram view
+  setCameraAz(spectAz);
+
+  // — Lights —
+  scene.add(new THREE.AmbientLight(0xffffff,1.2));
+  const dirLight = new THREE.DirectionalLight(0xffffff,0.8);
+  dirLight.position.set(1,1,1);
   scene.add(dirLight);
 
-  // Spectrogram geometry
-  const N = 256, M = 256;
-  const SPACING = 0.4, HEIGHT = 24, margin = SPACING*2;
-  const totalY  = N*SPACING, maxLog = Math.log10(N);
+  // — Audio & FFT setup —
+  let audioCtx, analyser, freqData, cutoffBin;
+  const fileIn = document.getElementById('audio-upload'),
+        audio  = document.getElementById('audio-player');
 
-  const planeGeo = new THREE.PlaneGeometry(M*SPACING, N*SPACING, M-1, N-1);
+  fileIn.addEventListener('change', async () => {
+    const file = fileIn.files[0];
+    if (!file) return;
+    audio.src = URL.createObjectURL(file);
+    await new Promise(r => audio.onloadedmetadata = r);
+    await audio.play().catch(()=>{});
+    audioCtx = new (window.AudioContext||window.webkitAudioContext)();
+    await audioCtx.resume();
+    analyser = audioCtx.createAnalyser();
+    analyser.fftSize = 512;
+    freqData = new Uint8Array(analyser.frequencyBinCount);
+    const binHz = audioCtx.sampleRate / analyser.fftSize;
+    cutoffBin = Math.floor(50 / binHz);
+    const src = audioCtx.createMediaElementSource(audio);
+    src.connect(analyser);
+    analyser.connect(audioCtx.destination);
+  });
+
+  // — Spectrogram (semi-log) —
+  const N=256, M=256,
+        SP=0.4, H=24, mg=SP*2,
+        totY=N*SP, maxLog=Math.log10(N);
+
+  const planeGeo = new THREE.PlaneGeometry(M*SP, N*SP, M-1, N-1);
   planeGeo.rotateX(-Math.PI/2);
-  const posArr = planeGeo.attributes.position.array;
-  for (let row=0; row<N; row++) {
-    const lp = Math.log10(1+row)/maxLog;
-    for (let col=0; col<M; col++) {
-      const i = (row*M + col)*3;
-      posArr[i+2] = -totalY/2 + margin + lp*(totalY - margin);
+  const pArr = planeGeo.attributes.position.array;
+  for (let row=0; row<N; row++){
+    const lp = Math.log10(1+row)/maxLog,
+          z  = -totY/2 + mg + lp*(totY-mg);
+    for (let col=0; col<M; col++){
+      pArr[(row*M+col)*3+2] = z;
     }
   }
   planeGeo.attributes.position.needsUpdate = true;
 
-  // Color buffer
-  const colorAttr = new THREE.BufferAttribute(new Float32Array(posArr.length), 3);
-  planeGeo.setAttribute('color', colorAttr);
-  const colArr = colorAttr.array;
+  const colArr = new Float32Array(pArr.length);
+  planeGeo.setAttribute('color', new THREE.BufferAttribute(colArr,3));
 
-  // Mesh material
-  const material = new THREE.MeshStandardMaterial({
-    vertexColors: true,
-    side: THREE.DoubleSide,
-    flatShading: true,
-    roughness: 0.0,
-    metalness: 0.7
+  const lutEl = document.getElementById('colormap');
+  const lut   = new Lut(lutEl.value,256);
+  lut.setMin(0); lut.setMax(1);
+  lutEl.addEventListener('change', e=> lut.setColorMap(e.target.value));
+
+  const spectMat  = new THREE.MeshStandardMaterial({
+    vertexColors:true, side:THREE.DoubleSide, flatShading:true,
+    roughness:0.0, metalness:0.6
   });
-  const mesh = new THREE.Mesh(planeGeo, material);
-  scene.add(mesh);
+  const spectMesh = new THREE.Mesh(planeGeo, spectMat);
+  spectMesh.visible = false;
+  scene.add(spectMesh);
 
-  // --- LUT setup ---
-  const lut = new Lut( document.getElementById('colormap').value, 256 );
-  lut.setMin(0);
-  lut.setMax(1);
+  let spectBuf = Array(M).fill().map(()=>new Uint8Array(N));
+  let sF=0, sT=0;
 
-  // When user changes the select:
-  document.getElementById('colormap').addEventListener('change', e => {
-    lut.setColorMap( e.target.value );
-  });
+  // — Sphere setup —
+  const R=40, S=64;
+  const sphereGeo  = new THREE.SphereGeometry(R,S,S);
+  const origSp     = sphereGeo.attributes.position.array.slice();
+  const sphereMat  = new THREE.MeshNormalMaterial({ wireframe:false, flatShading:true });
+  const sphereMesh = new THREE.Mesh(sphereGeo, sphereMat);
+  sphereMesh.visible = false;
+  scene.add(sphereMesh);
 
-  // UI elements
-  const fileIn = document.getElementById('audio-upload');
-  const audio  = document.getElementById('audio-player');
-  const reset  = document.getElementById('reset');
+  const snoise = new SimplexNoise();
+  function fbm(x,y,z){
+    let sum=0, a=1, f=1;
+    for(let i=0;i<4;i++){ sum += a * snoise.noise3D(x*f,y*f,z*f); f*=2; a*=0.5; }
+    return sum;
+  }
 
-  // Audio + FFT state
-  let audioCtx, analyser, dataArray, sourceNode;
-  let spectrogram = Array(M).fill().map(()=>new Uint8Array(N));
-  let frame=0, tick=0, ended=false, endCount=0;
+  // — UI logic —
+  const modeEl     = document.getElementById('mode'),
+        specCtrl   = document.getElementById('spectrogram-controls'),
+        sphereCtrl = document.getElementById('sphere-controls'),
+        noiseEl    = document.getElementById('noise-mag'),
+        resetBtn   = document.getElementById('reset');
 
-  // Reset
-  reset.addEventListener('click', ()=>window.location.reload());
-  fileIn.addEventListener('click', ()=>fileIn.value='');
+  function updateMode(){
+    const m = modeEl.value;
+    spectMesh.visible  = m==='spectrogram';
+    sphereMesh.visible = m==='sphere';
+    specCtrl.style.display   = m==='spectrogram' ? 'block':'none';
+    sphereCtrl.style.display = m==='sphere'     ? 'block':'none';
+    setCameraAz(m==='sphere'? sphereAz : spectAz);
+  }
+  modeEl.addEventListener('change', updateMode);
+  updateMode();
 
-  // Load & play audio + FFT
-  fileIn.addEventListener('change', async () => {
-    const file = fileIn.files[0];
-    if (!file) return;
+  resetBtn.addEventListener('click', ()=> window.location.reload());
 
-    // clear previous data
-    spectrogram = Array(M).fill().map(()=>new Uint8Array(N));
-    frame = tick = endCount = 0;
-    ended = false;
-    for (let i=0; i<posArr.length; i+=3) {
-      posArr[i+1] = 0;
-      colArr[i] = colArr[i+1] = colArr[i+2] = 0;
-    }
-    planeGeo.attributes.position.needsUpdate = true;
-    planeGeo.attributes.color.needsUpdate    = true;
-
-    // native audio playback
-    audio.src = URL.createObjectURL(file);
-    await new Promise(r=>audio.onloadedmetadata = r);
-    audio.play();
-
-    // Web Audio FFT
-    audioCtx     = new (window.AudioContext||window.webkitAudioContext)();
-    analyser     = audioCtx.createAnalyser();
-    analyser.fftSize = N*4;
-    dataArray    = new Uint8Array(analyser.frequencyBinCount);
-    sourceNode   = audioCtx.createMediaElementSource(audio);
-    sourceNode.connect(analyser);
-    analyser.connect(audioCtx.destination);
-    audio.onended = ()=>ended = true;
-
-    // start loops
-    requestAnimationFrame(updateMesh);
-    requestAnimationFrame(render);
+  // collapse UI
+  toggleBtn.addEventListener('click', ()=>{
+    uiPanel.classList.toggle('collapsed');
+    toggleBtn.textContent = uiPanel.classList.contains('collapsed')
+      ? 'Show ▼' : 'Hide ▲';
   });
 
-  // Mesh update
-  function updateMesh(){
-    requestAnimationFrame(updateMesh);
-    if (audio.paused && !ended) return;
-    if (++tick % 2) return;
+  // — Animate —
+  function animate(){
+    requestAnimationFrame(animate);
+    if(analyser) analyser.getByteFrequencyData(freqData);
 
-    analyser.getByteFrequencyData(dataArray);
-    spectrogram[ frame % M ] = Uint8Array.from(dataArray.subarray(0,N));
-    frame++;
-
-    for (let f=0; f<N; f++){
-      for (let t=0; t<M; t++){
-        const idx = (f*M + t)*3;
-        const v   = spectrogram[(frame-1-t+M)%M][f] / 255;
-        posArr[idx+1] = v * HEIGHT;
-
-        // Use the LUT for color:
-        const c = lut.getColor(v) || new THREE.Color(0,0,0);
-        colArr[idx]   = c.r;
-        colArr[idx+1] = c.g;
-        colArr[idx+2] = c.b;
+    if(modeEl.value==='spectrogram' && analyser){
+      if(++sT % 2 === 0){
+        spectBuf[sF % M] = Uint8Array.from(freqData.subarray(0,N));
+        sF++;
+        for(let f=0; f<N; f++){
+          for(let t=0; t<M; t++){
+            const idx = (f*M+t)*3;
+            const v   = spectBuf[(sF-1-t+M)%M][f]/255;
+            pArr[idx+1] = v*H;
+            const c = lut.getColor(v)||new THREE.Color(0,0,0);
+            colArr[idx]=c.r; colArr[idx+1]=c.g; colArr[idx+2]=c.b;
+          }
+        }
+        planeGeo.attributes.position.needsUpdate = true;
+        planeGeo.attributes.color.needsUpdate    = true;
       }
     }
-    planeGeo.attributes.position.needsUpdate = true;
-    planeGeo.attributes.color.needsUpdate    = true;
 
-    if (ended && ++endCount >= M) window.location.reload();
-  }
+    if(modeEl.value==='sphere' && analyser){
+      let sum=0;
+      for(let i=0;i<=cutoffBin;i++) sum+=freqData[i];
+      const amp = THREE.MathUtils.clamp(sum/((cutoffBin+1)*255),0,1),
+            base = R + amp*10,
+            mag  = parseFloat(noiseEl.value),
+            spArr= sphereGeo.attributes.position.array,
+            t0   = performance.now()*0.002;
+      for(let i=0;i<spArr.length;i+=3){
+        const ox=origSp[i], oy=origSp[i+1], oz=origSp[i+2],
+              L = Math.hypot(ox,oy,oz)||1,
+              nx=ox/L, ny=oy/L, nz=oz/L,
+              n = fbm(ox*0.01+t0,oy*0.01+t0,oz*0.01+t0)*amp,
+              d = base + n*mag;
+        spArr[i]=nx*d; spArr[i+1]=ny*d; spArr[i+2]=nz*d;
+      }
+      sphereGeo.attributes.position.needsUpdate = true;
+    }
 
-  // Render loop
-  function render(){
     controls.update();
     renderer.render(scene, camera);
-    requestAnimationFrame(render);
   }
+  animate();
 
+  // — Handle resize —
   window.addEventListener('resize', ()=>{
-    renderer.setSize(window.innerWidth, window.innerHeight - 80);
-    camera.aspect = window.innerWidth/(window.innerHeight-80);
+    renderer.setSize(container.clientWidth, container.clientHeight);
+    camera.aspect = container.clientWidth / container.clientHeight;
     camera.updateProjectionMatrix();
   });
-
-  render();
   </script>
 </body>
 </html>
